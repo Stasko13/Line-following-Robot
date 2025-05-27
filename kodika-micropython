@@ -1,0 +1,116 @@
+from machine import Pin, PWM, ADC
+import time
+
+# === Ρυθμίσεις μοτέρ ===
+left_pwm = PWM(Pin(10))
+left_dir = Pin(11, Pin.OUT)
+right_pwm = PWM(Pin(9))
+right_dir = Pin(8, Pin.OUT)
+left_pwm.freq(1000)
+right_pwm.freq(1000)
+
+# === Αισθητήρες ===
+sensor_left = ADC(Pin(26))
+sensor_middle = ADC(Pin(27))
+sensor_right = ADC(Pin(28))
+
+# === Κουμπιά ===
+btn_start = Pin(20, Pin.IN, Pin.PULL_UP)
+btn_stop = Pin(21, Pin.IN, Pin.PULL_UP)
+
+# === Buzzer ===
+buzzer = PWM(Pin(22))
+buzzer.freq(2000)
+
+# === Threshold για αναλογικό -> λογικό ===
+THRESHOLD = 25000
+running = False
+
+# === Βοηθητικές ===
+def beep(duration=0.15):
+    buzzer.duty_u16(30000)
+    time.sleep(duration)
+    buzzer.duty_u16(0)
+
+def read_sensors():
+    return sensor_left.read_u16(), sensor_middle.read_u16(), sensor_right.read_u16()
+
+def logic_from_analog(l, m, r):
+    return [
+        1 if l > THRESHOLD else 0,
+        1 if m > THRESHOLD else 0,
+        1 if r > THRESHOLD else 0
+    ]
+
+def set_motor(pwm, dir_pin, speed):
+    if speed >= 0:
+        dir_pin.value(1)
+    else:
+        dir_pin.value(0)
+        speed = -speed
+    pwm_val = 65535 - min(65535, int(abs(speed)))
+    pwm.duty_u16(pwm_val)
+
+
+def stop_motors():
+    left_pwm.duty_u16(0)
+    right_pwm.duty_u16(0)
+    left_dir.value(0)
+    right_dir.value(0)
+
+# === Εκκίνηση ===
+print("▶ Πάτησε GP20 για εκκίνηση")
+while btn_start.value():  # περιμένει να πατήσεις και να αφήσεις
+    time.sleep(0.05)
+beep()
+running = True
+time.sleep(0.2)
+
+# === Loop ===
+while True:
+    # Παύση
+    if btn_stop.value() == 0:
+        running = False
+        stop_motors()
+        while btn_stop.value() == 0:
+            time.sleep(0.05)
+        time.sleep(0.2)
+
+    # Εκκίνηση ξανά
+    if btn_start.value() == 0:
+        running = True
+        while btn_start.value() == 0:
+            time.sleep(0.05)
+        time.sleep(0.2)
+
+    if running:
+        l_val, m_val, r_val = read_sensors()
+        logic = logic_from_analog(l_val, m_val, r_val)
+
+        if logic == [0, 1, 0]:
+            left_speed = right_speed = 31000  # ευθεία
+
+        elif logic in ([1, 1, 0], [1, 0, 0]):
+            # ΠΑΕΙ ΑΡΙΣΤΕΡΑ → πρέπει να ΣΤΡΙΨΕΙ ΔΕΞΙΑ ⇒ right μπροστά, left πίσω
+            left_speed = -10000
+            right_speed = 10000
+
+        elif logic in ([0, 1, 1], [0, 0, 1]):
+            # ΠΑΕΙ ΔΕΞΙΑ → πρέπει να ΣΤΡΙΨΕΙ ΑΡΙΣΤΕΡΑ ⇒ left μπροστά, right πίσω
+            left_speed = 10000
+            right_speed = -10000
+
+        elif logic == [1, 1, 1]:
+            left_speed = right_speed = 0  # διασταύρωση
+            stop_motors()
+            time.sleep(5)
+        else:
+            left_speed = right_speed = 31000  # fallback
+
+
+
+        set_motor(left_pwm, left_dir, left_speed)
+        set_motor(right_pwm, right_dir, right_speed)
+
+    else:
+        stop_motors()
